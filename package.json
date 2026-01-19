@@ -1,0 +1,20 @@
+{
+  "name": "mangopay-gpay-bug-reproduction",
+  "version": "1.0.0",
+  "description": "Reproduction of Mangopay Checkout SDK error 205001 race condition when Google Pay is first payment method",
+  "scripts": {
+    "test": "node generate-certs.js && playwright test --headed",
+    "serve": "node generate-certs.js && npx serve -l 3456 --ssl-cert cert.pem --ssl-key key.pem",
+    "generate-certs": "node generate-certs.js"
+  },
+  "dependencies": {
+    "@mangopay/checkout-sdk": "^1.4.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "selfsigned": "^2.4.1",
+    "serve": "^14.2.0"
+  },
+  "keywords": ["mangopay", "google-pay", "bug-reproduction"],
+  "license": "MIT"
+}

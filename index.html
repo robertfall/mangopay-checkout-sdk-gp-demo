@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mangopay Google Pay Error 205001 Reproduction</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f8f9fa;
+    }
+    h1 { color: #1a1a2e; font-size: 1.5rem; }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .error-banner {
+      background: #fee2e2;
+      border: 1px solid #ef4444;
+      color: #991b1b;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .error-banner.visible { display: block; }
+    .success-banner {
+      background: #dcfce7;
+      border: 1px solid #22c55e;
+      color: #166534;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .success-banner.visible { display: block; }
+    #payment-container {
+      min-height: 350px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6b7280;
+    }
+    #log-container {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: 6px;
+      padding: 16px;
+      font-family: 'Monaco', 'Consolas', monospace;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .log-entry { margin: 4px 0; }
+    .log-time { color: #6b7280; }
+    .log-error { color: #f87171; }
+    .log-success { color: #4ade80; }
+    .log-info { color: #60a5fa; }
+    .log-message { color: #c084fc; }
+    code {
+      background: #e5e7eb;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    .hypothesis {
+      background: #fef3c7;
+      border-left: 4px solid #f59e0b;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Mangopay Checkout SDK - Error 205001 Race Condition</h1>
+
+  <div class="hypothesis">
+    <strong>Bug:</strong> Error 205001 "Unknown error" occurs when Google Pay is the <strong>first</strong>
+    payment method with <code>respectPaymentMethodsOrder: true</code>. The SDK attempts to render the
+    Google Pay button before the Google Pay script (<code>pay.google.com/gp/p/js/pay.js</code>) loads.
+  </div>
+
+  <div id="error-banner" class="error-banner">
+    <strong>Error 205001 Detected!</strong>
+    <p id="error-message"></p>
+  </div>
+
+  <div id="success-banner" class="success-banner">
+    <strong>No Error Detected</strong>
+    <p>The Google Pay script was likely cached. Try in incognito mode or clear cache.</p>
+  </div>
+
+  <div class="card">
+    <div id="payment-container">Loading SDK...</div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Console Log</h3>
+    <div id="log-container"></div>
+  </div>
+
+  <!-- Mangopay Checkout SDK (UMD bundle from node_modules) -->
+  <script src="node_modules/@mangopay/checkout-sdk/dist/umd/checkout-sdk.min.js"></script>
+
+  <script>
+    // =========================================================================
+    // CONFIGURATION - Uses same config as Mangopay's official demo app
+    // =========================================================================
+    var CONFIG = {
+      clientId: 'sdk-unit-tests',
+      environment: 'SANDBOX',
+      profilingMerchantId: 'sdk-unit-tests',
+      amount: 2000, // 20.00 EUR in cents
+      currency: 'EUR'
+    };
+
+    // =========================================================================
+    // LOGGING
+    // =========================================================================
+    var startTime = Date.now();
+    var error205001Detected = false;
+
+    function log(message, type, data) {
+      type = type || 'info';
+      var elapsed = Date.now() - startTime;
+      var timestamp = '+' + elapsed.toString().padStart(5, ' ') + 'ms';
+
+      var container = document.getElementById('log-container');
+      var entry = document.createElement('div');
+      entry.className = 'log-entry';
+
+      var timeSpan = document.createElement('span');
+      timeSpan.className = 'log-time';
+      timeSpan.textContent = '[' + timestamp + '] ';
+      entry.appendChild(timeSpan);
+
+      var msgSpan = document.createElement('span');
+      msgSpan.className = 'log-' + type;
+      msgSpan.textContent = message;
+      entry.appendChild(msgSpan);
+
+      if (data) {
+        var pre = document.createElement('pre');
+        pre.style.cssText = 'margin:4px 0 0 0;font-size:10px;color:#888;white-space:pre-wrap;';
+        pre.textContent = JSON.stringify(data, null, 2);
+        entry.appendChild(pre);
+      }
+
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+
+      console[type === 'error' ? 'error' : 'log']('[' + timestamp + ']', message, data || '');
+    }
+
+    // =========================================================================
+    // POSTMESSAGE LISTENER - Captures SDK iframe communication
+    // =========================================================================
+    window.addEventListener('message', function(event) {
+      if (!event.data || typeof event.data !== 'object') return;
+
+      var eventType = event.data.eventType;
+      var data = event.data.data;
+      if (!eventType || eventType === 'resize') return;
+
+      log('postMessage: ' + eventType, 'message', event.data);
+
+      // Detect error 205001
+      if (eventType === 'error' && data && data.error && data.error.ResultCode === '205001') {
+        error205001Detected = true;
+        log('ERROR 205001 DETECTED: "' + data.error.ResultMessage + '"', 'error');
+
+        document.getElementById('error-banner').classList.add('visible');
+        document.getElementById('error-message').textContent =
+          'ResultCode: 205001, ResultMessage: "' + data.error.ResultMessage + '"';
+      }
+    });
+
+    // =========================================================================
+    // SDK INITIALIZATION
+    // =========================================================================
+    function initializeSDK() {
+      var container = document.getElementById('payment-container');
+
+      log('=== STARTING SDK INITIALIZATION ===');
+
+      // Check SDK availability
+      var MangopayCheckoutSdk = window.CheckoutSdk;
+      if (!MangopayCheckoutSdk) {
+        log('ERROR: CheckoutSdk not loaded!', 'error');
+        container.textContent = 'SDK failed to load';
+        return;
+      }
+      log('CheckoutSdk loaded', 'success');
+
+      // Check if Google Pay script is pre-cached
+      var gpPreloaded = !!(window.google && window.google.payments && window.google.payments.api && window.google.payments.api.PaymentsClient);
+      log('Google Pay script pre-cached: ' + gpPreloaded, gpPreloaded ? 'info' : 'success');
+
+      // Check query parameter for payment method order
+      var urlParams = new URLSearchParams(window.location.search);
+      var cardFirst = urlParams.get('order') === 'card-first';
+
+      // Define payment methods
+      var googlePayMethod = {
+        type: 'google_pay',
+        options: {
+          merchantInfo: {
+            merchantId: CONFIG.clientId,
+            merchantName: CONFIG.clientId
+          },
+          gateway: 'whenthen',
+          cardParameters: {
+            allowedAuthMethods: ['PAN_ONLY', 'CRYPTOGRAM_3DS'],
+            allowedCardNetworks: ['VISA', 'MASTERCARD']
+          },
+          transactionInfo: {
+            totalPrice: '20.00',
+            totalPriceStatus: 'FINAL',
+            currencyCode: 'EUR',
+            countryCode: 'DE',
+            transactionId: 'repro-' + Date.now()
+          }
+        }
+      };
+
+      var cardMethod = {
+        type: 'card',
+        options: {
+          supportedCardBrands: ['VISA', 'MASTERCARD', 'CB', 'MAESTRO']
+        }
+      };
+
+      // Order payment methods based on query param
+      var paymentMethods = cardFirst
+        ? [cardMethod, googlePayMethod]
+        : [googlePayMethod, cardMethod];
+
+      log('Payment method order: ' + (cardFirst ? 'Card first (control)' : 'Google Pay first (bug trigger)'));
+
+      // SDK options
+      var options = {
+        clientId: CONFIG.clientId,
+        environment: CONFIG.environment,
+        profilingMerchantId: CONFIG.profilingMerchantId,
+        amount: {
+          value: CONFIG.amount,
+          currency: CONFIG.currency
+        },
+
+        // CRITICAL: This makes payment methods appear in specified order
+        respectPaymentMethodsOrder: true,
+
+        paymentMethods: paymentMethods
+      };
+
+      log('Initializing SDK...');
+
+      // Create container
+      container.textContent = '';
+      var sdkContainer = document.createElement('div');
+      sdkContainer.id = 'mangopay-checkout';
+      container.appendChild(sdkContainer);
+
+      log('Calling CheckoutSdk.loadCheckoutSdk()...');
+
+      MangopayCheckoutSdk.loadCheckoutSdk(sdkContainer, options)
+        .then(function(sdk) {
+          log('SDK initialized', 'success');
+
+          // Wait for async errors
+          setTimeout(function() {
+            if (error205001Detected) {
+              log('=== REPRODUCTION SUCCESSFUL: Error 205001 detected ===', 'error');
+            } else {
+              log('=== No 205001 error (script may have been cached) ===', 'success');
+              document.getElementById('success-banner').classList.add('visible');
+            }
+          }, 3000);
+        })
+        .catch(function(err) {
+          log('SDK error: ' + err.message, 'error');
+        });
+    }
+
+    // Auto-initialize on load
+    document.addEventListener('DOMContentLoaded', initializeSDK);
+  </script>
+</body>
+</html>
